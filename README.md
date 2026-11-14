@@ -7,18 +7,11 @@ Linux · Shell 脚本 · 容器 · 监控
 
 ## 这个仓库解决什么问题
 
-不是教程笔记，是**能跑起来的东西**。每一项都对应一类运维日常工作：
+是**能跑起来的能处理运维工作的东西**。
 
-| 目录 | 解决什么问题 |
+| 目录 |解决了什么问题|
 |---|---|
 | [scripts/](./scripts/) | 日常巡检与备份的自动化：磁盘告警、日志归档、数据库备份 |
-| docker/ | 用容器跑应用：部署、编排、数据持久化 |
-| k8s/ | 编排调度与排障 |
-| monitor/ | 监控与告警链路 |
-| python/ | 比 Shell 更合适的场景：端口探测、日志统计 |
-| checklist/ | 巡检清单：Linux 加固、Windows 加固、网络设备核查 |
-| docs/ | 运维手册、排障记录 |
-
 ---
 
 ## scripts/
@@ -60,14 +53,3 @@ Kali 的 find 不认 `-verbose`，报 `find: unknown predicate '-verbose'`。
 `$file` 如果路径里有空格，会被拆成两个参数。养成习惯：**永远写 `"$file"`**。
 
 ---
-
-## 待办（按 8 周计划推进）
-
-- [x] Week 1：三个 Shell 脚本
-- [ ] Week 1：Python 基础（第 1–7 天）
-- [ ] Week 2：Docker 三天 + Linux 加固四天
-- [ ] Week 3：SQL + 日志切割实战 + 运维手册
-- [ ] Week 4：Python 小工具 + Prometheus/Grafana
-- [ ] Week 5–6：K8s 部署与排障 + 阿里云
-- [ ] Week 7：Windows Server + 网络设备核查
-- [ ] Week 8：仓库整合 + 简历改版
