@@ -45,9 +45,6 @@ docker/
 | 改用 RUN 写页面 | `RUN echo ... > index.html` | `RUN 写的` | **RUN 在构建时把内容固化了** |
 | 装回 COPY | 从宿主机搬文件 | 自己的标题 | COPY 是"搬运"，RUN 是"执行" |
 
-**同一个基础镜像，只改一行指令，输出完全不同 —— 这就是镜像分层的意义。**
-
-`docker history` 里能看到：最上面一层是 `COPY index.html`（几十字节），下面全是 nginx 官方镜像的层。
 
 ---
 
@@ -57,7 +54,6 @@ docker/
 
 报错：`"/index.htlm": not found`
 
-**注意：文件名拼错会报错，但路径 `/uer/` 拼错不会报错，只是页面不生效。后者更危险。**
 
 **2. 所有容器 `Exited (255)`**
 
@@ -73,7 +69,6 @@ ERROR 2026 (HY000): TLS/SSL error: Certificate verification failure
 
 修法：`mysql --skip-ssl` 或 `--ssl=0`。
 
-**报证书错说明网络已经通了，只是 TLS 握手失败。**
 
 **4. `docker build .` 报 `open Dockerfile: no such file or directory`**
 
@@ -99,19 +94,3 @@ docker container prune -f
 ```
 
 **`rm` 删容器，`rmi` 删镜像 —— 容器有名字，镜像有标签（带冒号）。**
-
----
-
-## 面试能答的四题
-
-**Q：容器和虚拟机的区别？**
-容器共享宿主机内核，启动是秒级；虚拟机跑完整操作系统，启动要几十秒。
-
-**Q：容器里的数据怎么持久化？**
-用数据卷。`-v 宿主机目录:容器目录` 是绑定挂载，`-v 卷名:容器目录` 是命名卷（Docker 在 `/var/lib/docker/volumes/` 下管理）。写容器层的数据随容器删除消失。
-
-**Q：镜像是怎么构建的？**
-Dockerfile 逐条执行，每条指令生成一层，层可复用（缓存）。改哪层只重建哪层之后的。
-
-**Q：容器怎么做到开机自启？**
-`docker run` 时加 `--restart unless-stopped`；已在跑的用 `docker update --restart unless-stopped 容器名`；compose 里写 `restart: unless-stopped`。
