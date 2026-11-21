@@ -1,6 +1,6 @@
 # ops-lab
 
-2027 届 · 张野 · 机械设计制造及其自动化 → IT 运维 / 安全运维方向
+2027 届 · 机械设计制造及其自动化 → IT 运维 / 安全运维方向
 Linux · Shell 脚本 · 容器 · 监控
 
 ---
@@ -15,7 +15,10 @@ Linux · Shell 脚本 · 容器 · 监控
 | [docker/](./docker/) | 用容器跑应用：部署、编排、数据持久化 | ✅ 含 3 张实测截图 |
 | [checklist/](./checklist/) | 巡检清单：Linux 加固 20 条 + 巡检采集脚本 | ✅ 20 条已实测填写 |
 | [sql/](./sql/) | 运维常用查询：聚合、分组、多表、子查询 | ✅ 建库脚本 + 10 题答案 |
-| [docs/](./docs/) | 运维手册、排障记录、速查表 | ✅ 2 份 |
+| [python/](./python/) | 比 Shell 更合适的场景：端口探测、日志统计 | ✅ port_scan.py 扫 5 端口全通 |
+| [k8s/](./k8s/) | 编排调度与排障 | 🚧 第 5–6 周 |
+| [monitor/](./monitor/) | 监控与告警链路 | ✅ 三容器 + 1860 看板 |
+| [docs/](./docs/) | 运维手册、排障记录、速查表 | ✅ 6 份 |
 
 ---
 
@@ -44,7 +47,7 @@ sudo python3 scripts/log_stat.py
 
 ## docker/
 
-总结：**`docker history` 看镜像分层，`Dockerfile` 改一行就得重新 build，改了不 build 冰箱里还是旧菜。**
+一句话总结：**`docker history` 看镜像分层，`Dockerfile` 改一行就得重新 build，改了不 build 冰箱里还是旧菜。**
 
 | 文件 | 说明 |
 |---|---|
@@ -132,3 +135,15 @@ Kali 的 find 不认 `-verbose`，报 `find: unknown predicate '-verbose'`。
 **6. `docker rm` 删容器，`docker rmi` 删镜像**
 报 `No such container: myweb` 是因为 myweb 是镜像；
 报 `No such image: r1:latest` 是因为 r1 是容器。
+
+---
+
+## 待办（按 8 周计划推进）
+
+- [x] Week 1：三个 Shell 脚本 + Python 基础（第 1–7 天）
+- [x] Week 2：Docker 三天（提前完成）+ Linux 加固四天
+- [ ] Week 3：SQL（进行中）+ 日志切割实战 + 运维手册
+- [ ] Week 4：Python 小工具（`port_scan.py` / `log_stat.py`）+ Prometheus/Grafana
+- [ ] Week 5–6：K8s 部署与排障 + 阿里云
+- [ ] Week 7：Windows Server + 网络设备核查
+- [ ] Week 8：仓库整合 + 简历改版
