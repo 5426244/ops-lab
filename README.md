@@ -51,8 +51,6 @@ sudo python3 scripts/log_stat.py
 | 文件 | 说明 |
 |---|---|
 | [docker/README.md](./docker/README.md) | 七个环节、三个实验对比、四个坑 |
-| docker/myweb/Dockerfile | 基于 nginx，`COPY` 自定义首页 |
-| docker/stack/docker-compose.yml | nginx + mysql 5.7 双服务 |
 
 三个实验的差别（只看 `curl` 返回）：
 
