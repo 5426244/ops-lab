@@ -121,10 +121,49 @@ curl -sS --data-urlencode 'query=100 - (avg(rate(node_cpu_seconds_total{mode="id
 
 > 我用 Docker 起了 Prometheus + node_exporter + Grafana 这套监控。node_exporter 通过 `--pid=host` 和挂载宿主根目录采集真实的物理机指标；Prometheus 每 15 秒拉一次，配置写在 `prometheus.yml` 里；Grafana 通过容器网络连 Prometheus，导入 1860 看板出图。判断采集是否正常，看 `up` 这个指标——每个 target 的值是 1 就说明抓取成功，0 就是目标挂了。
 
+## 实测结果（2026-11-22，Debian 13 opslab）
+
+环境：Debian 13 (kernel 6.12)、Docker 26.1.5、2 核 2 GB 内存、根分区 23 GB。
+
+```
+$ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+NAMES           STATUS          PORTS
+grafana         Up 15 seconds   0.0.0.0:3000->3000/tcp
+prometheus      Up 4 minutes    0.0.0.0:9090->9090/tcp
+node-exporter   Up 5 minutes    0.0.0.0:9100->9100/tcp
+```
+
+```
+$ curl -s 'http://127.0.0.1:9090/api/v1/query?query=up'
+{"metric":{"instance":"node-exporter:9100","job":"node"},"value":[...,"1"]}
+{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[...,"1"]}
+```
+
+看板 1860 出图后的实测数值（开机 1.5 小时、空闲状态）：
+
+| 面板 | 值 |
+|---|---|
+| CPU Busy | 7.7% |
+| Sys Load | 21.0% |
+| RAM Used | 82.1%（2 GiB 总量） |
+| SWAP Used | 34.6%（1 GiB 总量） |
+| Root FS Used | 30.9%（23 GiB 总量） |
+| Uptime | 1.5 hours |
+
+> 刚导入看板时图上只有最右侧一小段曲线，是因为 Prometheus 才跑了十几分钟、只存了这些点。
+> 时间范围选 `Last 1 hour` 或 `Last 15 minutes` 曲线就铺满了；选 `Last 24 hours` 大部分是空的，属正常。
+
+两个坑（Docker Hub 与 curl）：
+
+| 坑 | 现象 | 解法 |
+|---|---|---|
+| Docker Hub 拉不下来 | `Get "https://registry-1.docker.io/v2/": Client.Timeout exceeded` | 配 `/etc/docker/daemon.json` 的 `registry-mirrors`，或 `docker pull 加速器域名/镜像名` 后打回本地 tag |
+| `curl: command not found` | setup.sh 检测到 docker 已装而跳过 apt，把 curl 也跳了 | `sudo apt install -y curl`（脚本已修） |
+
 ## 截图索引
 
 | 文件 | 内容 |
 |---|---|
-| `screenshots/01-prometheus-targets.png` | `up` 查询返回两个 target 都是 1 |
-| `screenshots/02-prometheus-cpu-query.png` | CPU 使用率查询结果 |
-| `screenshots/03-grafana-dashboard.png` | Grafana 1860 看板出图 |
+| `screenshots/01-prometheus-targets-两个UP.png` | `http://127.0.0.1:9090/targets`，job=node 与 job=prometheus 均为 UP |
+| `screenshots/02-grafana-datasource-连接成功.png` | 数据源 `http://prometheus:9090`，绿色 `Successfully queried the Prometheus API` |
+| `screenshots/03-grafana-dashboard-1860.png` | Node Exporter Full 看板，CPU / 内存 / 网络 / 磁盘 均有数据 |
