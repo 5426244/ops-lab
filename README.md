@@ -1,4 +1,4 @@
-# ops-lab
+﻿# ops-lab
 
 2027 届 · 机械设计制造及其自动化 → IT 运维 / 安全运维方向
 Linux · Shell 脚本 · 容器 · 监控
@@ -142,8 +142,10 @@ Kali 的 find 不认 `-verbose`，报 `find: unknown predicate '-verbose'`。
 
 - [x] Week 1：三个 Shell 脚本 + Python 基础（第 1–7 天）
 - [x] Week 2：Docker 三天（提前完成）+ Linux 加固四天
-- [ ] Week 3：SQL（进行中）+ 日志切割实战 + 运维手册
-- [ ] Week 4：Python 小工具（`port_scan.py` / `log_stat.py`）+ Prometheus/Grafana
+- [x] Week 3：SQL + 备份恢复实战 + logrotate + 运维手册
+- [x] Week 4：Python 小工具（`port_scan.py` / `log_stat.py`）+ Prometheus/Grafana
 - [ ] Week 5–6：K8s 部署与排障 + 阿里云
 - [ ] Week 7：Windows Server + 网络设备核查
 - [ ] Week 8：仓库整合 + 简历改版
+
+
