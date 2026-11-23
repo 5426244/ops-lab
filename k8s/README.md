@@ -199,9 +199,6 @@ Content-Length: 615
 | 删整个应用 | `kubectl delete deploy/web svc/web` |
 | 看 containerd 里的镜像 | `sudo k3s crictl images` |
 
-## 面试 30 秒
-
-> 我在 Debian 上用 k3s 起了单节点集群。国内搭 K8s 最难的不是装，是拉镜像——k3s 装完所有 Pod 卡在 ContainerCreating，`describe` 一看是 `FailedCreatePodSandBox: failed to pull rancher/mirrored-pause`。pause 是每个 Pod 的沙箱地基镜像，它拉不到后面全卡，而且报的是 sandbox 失败不是 ImagePull，容易误判。解法是 `/etc/rancher/k3s/registries.yaml` 给 docker.io 配 mirror endpoint，重启 k3s，再删掉卡死的 Pod 让它重建。之后我用 Deployment 跑 nginx，`kubectl get deploy,rs,pods,svc` 能看到四层关系，`expose --type=NodePort` 后 curl 宿主机端口返回 200。
 
 ## 截图索引
 
@@ -209,9 +206,3 @@ Content-Length: 615
 |---|---|
 | `screenshots/01-k3s-四层对象与Service.png` | `deploy,rs,pods,svc` 一次看全：Deployment 1/1、RS 1/1、Pod Running、Service NodePort 80:32676 |
 | `screenshots/02-k3s-curl验证nginx.png` | `curl -I 127.0.0.1:32676` 返回 `HTTP/1.1 200 OK` + `Server: nginx/1.27.5` |
-
-## 明天要做的
-
-- Pod 一直重启怎么查（`CrashLoopBackOff` / `ImagePullBackOff` / `OOMKilled`）
-- `kubectl logs --previous` 看崩溃前的日志
-- 故意制造故障 + 写一次完整排障记录
