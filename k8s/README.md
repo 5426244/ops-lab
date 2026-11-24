@@ -199,6 +199,192 @@ Content-Length: 615
 | 删整个应用 | `kubectl delete deploy/web svc/web` |
 | 看 containerd 里的镜像 | `sudo k3s crictl images` |
 
+## 面试 30 秒
+
+> 我在 Debian 上用 k3s 起了单节点集群。国内搭 K8s 最难的不是装，是拉镜像——k3s 装完所有 Pod 卡在 ContainerCreating，`describe` 一看是 `FailedCreatePodSandBox: failed to pull rancher/mirrored-pause`。pause 是每个 Pod 的沙箱地基镜像，它拉不到后面全卡，而且报的是 sandbox 失败不是 ImagePull，容易误判。解法是 `/etc/rancher/k3s/registries.yaml` 给 docker.io 配 mirror endpoint，重启 k3s，再删掉卡死的 Pod 让它重建。之后我用 Deployment 跑 nginx，`kubectl get deploy,rs,pods,svc` 能看到四层关系，`expose --type=NodePort` 后 curl 宿主机端口返回 200。
+
+## 三个故障实测（2026-11-24）
+
+三个故障对应三种状态，都是自己造的。下面每个都按「制造 → 现象 → 定位 → 结论 → 修」写。
+
+### 排障固定顺序
+
+从上往下查，查到哪步有答案就停：
+
+| 顺序 | 命令 | 看什么 |
+|---|---|---|
+| 1 | `kubectl get pods` | STATUS 和 RESTARTS |
+| 2 | `kubectl describe pod <名>` | **Events 段（在最后）** |
+| 3 | `kubectl logs <名>` | 程序自己说什么 |
+| 4 | `kubectl logs <名> --previous` | 崩溃前那次 |
+| 5 | `kubectl get pod <名> -o yaml` | 配置写对没 |
+
+两个要害：**`describe` 的 Events 在末尾**；**`logs --previous` 才是崩溃前**。
+
+### 故障一：CrashLoopBackOff（程序自己退出）
+
+**制造**
+
+```bash
+kubectl run crash --image=nginx:1.27 -- sh -c "echo 启动中; sleep 2; exit 1"
+kubectl get pods -w
+```
+
+**现象**
+
+```
+crash   0/1   Running             0   3s
+crash   0/1   Error               1   8s
+crash   0/1   CrashLoopBackOff    1   12s
+crash   0/1   CrashLoopBackOff    2   35s   ← 间隔变长
+crash   0/1   CrashLoopBackOff    3   1m20s
+```
+
+`RESTARTS` 在涨，但**每次重启间隔越来越长**——这是 K8s 的退避（backoff），防止坏容器打满 CPU。
+
+**定位**
+
+```bash
+kubectl describe pod crash | grep -A12 "Containers:"
+kubectl logs crash --previous
+```
+
+证据链：
+
+| 证据 | 值 | 含义 |
+|---|---|---|
+| `State` | `Waiting` / `CrashLoopBackOff` | 等下一次重启 |
+| `Last State` | `Terminated` / `Reason: Error` | 上次是异常终止 |
+| `Exit Code` | `1` | 程序自己认为失败 |
+| `Args` | `sh -c echo 启动中 ; sleep 2 ; exit 1` | **命令原文就写着 `exit 1`** |
+| `logs --previous` | `启动中` | 跑了两秒就退 |
+
+**结论**：不是镜像问题、不是资源问题，是程序自身退出。
+
+**一个坑**：`logs --previous` 有时报 `unable to retrieve container logs`——容器重启多次后旧实例被 containerd 回收，日志跟着没了。这时看 `Args` 段，命令原文比日志更直接。
+
+**修**
+
+```bash
+kubectl run crash-fixed --image=nginx:1.27 -- sh -c "echo 修好了; sleep 3600"
+kubectl get pods
+```
+
+```
+crash-fixed   1/1   Running            0   10s   ← 同镜像，只是不退出
+crash         0/1   CrashLoopBackOff   3   3m
+```
+
+### 故障二：ImagePullBackOff（镜像拉不到）
+
+**制造**
+
+```bash
+kubectl run bad --image=nginx:9.99
+kubectl get pods -w
+```
+
+**现象**（3 秒内两次跳变）
+
+```
+bad   0/1   ContainerCreating   0   6s
+bad   0/1   ErrImagePull        0   30s
+bad   0/1   ImagePullBackOff    0   37s
+```
+
+**定位**
+
+```bash
+kubectl describe pod bad | tail -8
+```
+
+```
+Warning  Failed  ...  Failed to pull image "nginx:9.99":
+  failed to resolve reference "docker.io/library/nginx:9.99":
+  unexpected status from HEAD request to https://docker.m.daocloud.io/v2/library/nginx/manifests/9.99:
+  403 Forbidden
+  denied: 这镜像不在白名单 this image is not in the allowlist
+```
+
+**结论**：三层信息——K8s 层 `ImagePullBackOff`、请求层 `403`、原因层 `not in allowlist`。
+因为 `9.99` 这个 tag 不存在，镜像站查不到就拒绝。
+
+**镜像站不是有求必应的，它有白名单。**「同样的镜像别人能拉我不能拉」，很可能不是网络问题，是镜像站没收录。
+
+**修**：换成存在的 tag（`nginx:1.27` 已在本地，`Pulled` 事件显示 `already present`）。
+
+### 故障三：OOMKilled（内存超限被杀）
+
+这个故障走了一段弯路，弯路本身有教学价值。
+
+**第一轮：`8Mi` → 还是 Running**
+
+```bash
+kubectl run oom --image=nginx:1.27 --restart=Never --overrides='{"spec":{"containers":[{"name":"oom","image":"nginx:1.27","resources":{"limits":{"memory":"8Mi"}}}]}}'
+```
+
+结果一直 `Running`——**说明空闲的 nginx 只吃 4–6 MB，8Mi 装得下**。
+
+**第二轮：`2Mi` → StartError**
+
+```bash
+kubectl delete pod oom --ignore-not-found
+kubectl run oom --image=nginx:1.27 --restart=Never --overrides='{"spec":{"containers":[{"name":"oom","image":"nginx:1.27","resources":{"limits":{"memory":"2Mi"}}}]}}'
+```
+
+结果 `StartError`，且 `grep "Last State"` **什么都没输出**——因为容器从来没跑起来过，没有「上一次终止」。
+
+`2Mi` 小到容器运行时都起不来，这时候报的是 `StartError`（`State: Waiting`），不是 `OOMKilled`。
+
+**第三轮：主动吃内存 → 成功**
+
+```bash
+kubectl delete pod oom --ignore-not-found
+kubectl run oom --image=alpine:3.20 --restart=Never --overrides='{"spec":{"containers":[{"name":"oom","image":"alpine:3.20","command":["sh","-c","echo 开始吃内存; dd if=/dev/zero of=/dev/shm/big bs=1M count=100; sleep 3600"],"resources":{"limits":{"memory":"32Mi"}}}]}}'
+```
+
+`dd` 往 `/dev/shm`（内存盘，算进 cgroup）写 100 MB，limit 只有 32Mi，写到 32 MB 被内核 SIGKILL。
+
+**验证**
+
+```bash
+kubectl get pods
+kubectl get pod oom -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}{" / exit "}{.status.containerStatuses[0].state.terminated.exitCode}'
+```
+
+```
+NAME   READY   STATUS      RESTARTS   AGE
+oom    0/1     OOMKilled   0          99s
+
+OOMKilled / exit 137
+```
+
+**关键数字**：`32Mi` 足够让 alpine 启动，又不够写完 100 MB——这个甜点区才出得来 `OOMKilled`。
+
+### 状态对照表（这张是核心）
+
+| 状态 | 容器走到哪一步 | 有退出码 | 典型原因 |
+|---|---|---|---|
+| `CrashLoopBackOff` | 起来了，反复退出 | 有（1 / 137 / 143） | 程序 bug、探针失败 |
+| `ImagePullBackOff` | 没到容器这步 | 无 | tag 错、镜像站拦截、网络 |
+| `OOMKilled` | 起来了，被内核杀 | 有（137） | 超 memory limit |
+| `StartError` | 没起来 | 无 | limit 小到运行时都起不来 |
+| `ErrImagePull` | 拉取首次失败 | 无 | 过渡态，几秒后转 `ImagePullBackOff` |
+
+**判据：有退出码说明容器跑过；没退出码说明没跑起来。**
+
+### 退出码表
+
+| 码 | 含义 | 对付办法 |
+|---|---|---|
+| `0` | 正常结束 | — |
+| `1` | 程序自己认为失败 | 看日志、改代码 |
+| `137` | `128 + 9`，被 SIGKILL | 多半是 OOM，查 limit |
+| `143` | `128 + 15`，收到 SIGTERM | 正常停止 / 被驱逐 |
+
+### 面试 30 秒
+
+> 三个高频故障我都自己造过。`CrashLoopBackOff` 的判断依据是 `describe` 里 `Last State` 的退出码：1 是程序自己退出，137 是被杀，143 是收到 SIGTERM。`ImagePullBackOff` 必须读 Events 原文——我遇到的不是 `manifest unknown` 而是镜像站 `403 not in allowlist`，说明 tag 不存在。`OOMKilled` 我踩过一个坑：limit 给到 2Mi 报的是 `StartError` 不是 `OOMKilled`，因为容器根本没起来；要造这个故障得让 limit 够启动、不够跑业务，我用 alpine + dd 写内存盘才稳定复现，退出码 137。**判据是有没有退出码——有退出码说明容器跑过，没退出码说明没跑起来。**
 
 ## 截图索引
 
@@ -206,3 +392,13 @@ Content-Length: 615
 |---|---|
 | `screenshots/01-k3s-四层对象与Service.png` | `deploy,rs,pods,svc` 一次看全：Deployment 1/1、RS 1/1、Pod Running、Service NodePort 80:32676 |
 | `screenshots/02-k3s-curl验证nginx.png` | `curl -I 127.0.0.1:32676` 返回 `HTTP/1.1 200 OK` + `Server: nginx/1.27.5` |
+| `screenshots/03-k8s-CrashLoopBackOff-与修复对比.png` | `crash2 Error / RESTARTS 3` + `Args: exit 1` + `crash-fixed Running`，一张图含故障与修复 |
+| `screenshots/05-k8s-ImagePullBackOff-状态流转.png` | `ContainerCreating → ErrImagePull → ImagePullBackOff` 三次跳变 |
+| `screenshots/06-k8s-ImagePullBackOff-Events.png` | Events 里的 `403 Forbidden` + `this image is not in the allowlist` |
+| `screenshots/07-k8s-OOMKilled-退出码137.png` | `oom 0/1 OOMKilled` + `OOMKilled / exit 137` |
+
+## 接下来
+
+- 探针：`livenessProbe` / `readinessProbe` 造「探针失败被重启」的第四种重启原因
+- 持久化：PVC + StorageClass（k3s 自带 local-path）
+- 阿里云：ECS + 安全组 + OSS（W6 内容）
