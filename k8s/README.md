@@ -386,6 +386,208 @@ OOMKilled / exit 137
 
 > 三个高频故障我都自己造过。`CrashLoopBackOff` 的判断依据是 `describe` 里 `Last State` 的退出码：1 是程序自己退出，137 是被杀，143 是收到 SIGTERM。`ImagePullBackOff` 必须读 Events 原文——我遇到的不是 `manifest unknown` 而是镜像站 `403 not in allowlist`，说明 tag 不存在。`OOMKilled` 我踩过一个坑：limit 给到 2Mi 报的是 `StartError` 不是 `OOMKilled`，因为容器根本没起来；要造这个故障得让 limit 够启动、不够跑业务，我用 alpine + dd 写内存盘才稳定复现，退出码 137。**判据是有没有退出码——有退出码说明容器跑过，没退出码说明没跑起来。**
 
+## 第四种重启原因：探针（2026-11-25）
+
+前面三个故障都是「容器自己出问题」，这一种是 **K8s 主动杀它**。
+
+### liveness 失败 → 杀掉重启
+
+**制造**
+
+```bash
+kubectl run probe --image=nginx:1.27 --overrides='{"spec":{"containers":[{"name":"probe","image":"nginx:1.27","livenessProbe":{"exec":{"command":["cat","/tmp/healthy"]},"initialDelaySeconds":5,"periodSeconds":5,"failureThreshold":2}}]}}'
+```
+
+探针是 `cat /tmp/healthy`，而这个文件不存在，所以必然失败。
+
+**现象**
+
+```
+probe   1/1   Running   0   3s
+probe   1/1   Running   1   25s     ← STATUS 一直是 Running，只有 RESTARTS 在涨
+probe   0/1   CrashLoopBackOff   3   1m15s
+```
+
+**和昨天的 `CrashLoopBackOff` 的区别**：昨天那个 Pod 一直 `Error`，这个是「跑着跑着被杀」。
+
+**定位**
+
+```bash
+kubectl describe pod probe | grep -B2 -A6 "Liveness"
+```
+
+```
+Restart Count:  5
+Liveness:       exec [cat /tmp/healthy] delay=5s timeout=1s period=5s #success=1 #failure=2
+
+Events:
+  Warning  Unhealthy  65s (x12 over 2m30s)  Liveness probe failed: cat: /tmp/healthy: No such file or directory
+  Normal   Killing    65s (x6 over 2m25s)   Container probe failed liveness probe, will be restarted
+  Warning  BackOff    4s  (x5 over 1m15s)   Back-off restarting failed container probe
+```
+
+**一个容易被忽略的数字关系**：`Unhealthy` 12 次、`Killing` 6 次，正好 **2:1** ——
+因为 `failureThreshold: 2`，连续失败 2 次才杀一次。**这个比例就是 `failureThreshold` 的可视化证明。**
+
+**修法 A（治标）：把探针指到真实存在的路径**
+
+Pod 的 `livenessProbe` 不可改，只能删了重建：
+
+```bash
+kubectl delete pod probe
+kubectl run probe --image=nginx:1.27 --overrides='{"spec":{"containers":[{"name":"probe","image":"nginx:1.27","livenessProbe":{"httpGet":{"path":"/","port":80},"initialDelaySeconds":3,"periodSeconds":5,"failureThreshold":2}}]}}'
+```
+
+**修法 B（治本）：别用 liveness 检查外部依赖**
+
+如果 `livenessProbe` 查的是「数据库连不连得上」：
+
+> 数据库一抖动 → 所有 Pod 健康检查全失败 → K8s 把所有 Pod 全部重启 → **雪崩**
+
+### readiness 失败 → 不重启，只摘流量
+
+**制造**
+
+```bash
+kubectl create deployment ready --image=nginx:1.27
+kubectl patch deployment ready -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","image":"nginx:1.27","readinessProbe":{"httpGet":{"path":"/healthz","port":80},"periodSeconds":3,"failureThreshold":2}}]}}}}'
+kubectl get pods -l app=ready -o wide
+```
+
+**现象（这是全 K8s 最容易被误判的状态）**
+
+```
+NAME                     READY   STATUS    AGE   IP
+ready-5699ddfb49-7qjff   1/1     Running   8m    10.42.0.151    ← 旧版，服务中
+ready-6d7fb5b989-jn2fv   0/1     Running   24s   10.42.0.152    ← 新版，不 Ready
+
+NAME    ENDPOINTS        AGE
+ready   10.42.0.151:80   7m58s     ← 只有旧 Pod 的 IP
+
+$ kubectl rollout status deployment/ready --timeout=5s
+Waiting for deployment "ready" rollout to finish: 1 old replicas are pending termination...
+error: timed out waiting for the condition
+```
+
+**关键**：新 Pod `STATUS` 是 `Running`（容器活得好好的），但 `READY` 是 `0/1`，所以**不进 Endpoints**。
+
+**所以旧 Pod 一直不被替换，发布卡住 —— 但线上服务完全没有中断。**
+
+### 这组对照就是「零宕机发布」的全部
+
+| 探针 | 失败后的 Pod 状态 | Service 后端 | 会不会重启 |
+|---|---|---|---|
+| `livenessProbe` 挂 | 反复重启 → `CrashLoopBackOff` | 有（但一直重启） | **会** |
+| `readinessProbe` 挂 | **`Running` 但 `READY 0/1`** | **不含它** | **不会** |
+
+**没有 readiness 会怎样**：新 Pod 一起来就被塞进 Endpoints，用户 50% 报错。
+**有 readiness**：新 Pod 不健康就不接流量，旧版本继续扛 —— 发布卡住但服务不中断。
+
+### 三种探针分工
+
+| 探针 | 失败时 | 该查什么 |
+|---|---|---|
+| `livenessProbe` | **杀掉重启** | 只查自己进程是否卡死（死锁、线程池耗尽） |
+| `readinessProbe` | **不重启，从 Service 摘掉** | 查依赖（数据库/缓存/下游接口） |
+| `startupProbe` | 启动期保护，成功后不再查 | 查启动是否完成（慢启动应用） |
+
+**一句话：依赖挂了用 readiness，进程死了用 liveness。搞反就是雪崩。**
+
+### 顺带：Endpoints 已被 EndpointSlice 取代
+
+```
+Warning: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice
+```
+
+| | Endpoints | EndpointSlice |
+|---|---|---|
+| 一个 Service 对应几个对象 | 1 个（Pod 全塞进去） | 多个（每片最多 100 个） |
+| 大规模服务 | 单对象过大，etcd 压力大 | 分片，可扩展 |
+| 状态 | **已弃用** | 推荐 |
+
+查法：`kubectl get endpointslices -l kubernetes.io/service-name=ready`
+
+## 持久化：PVC（2026-11-25）
+
+思想和 Docker 数据卷一样（容器删了数据还在），只是 K8s 多了两层抽象。
+
+| 对象 | 是什么 | 类比 Docker |
+|---|---|---|
+| **PV** | 集群里的一块真实存储（k3s 用 local-path，落在 `/var/lib/rancher/k3s/storage`） | 宿主机上某个目录 |
+| **PVC** | 我的申请单：「我要 1Gi，可读写」 | `-v` 那行的左边 |
+| **StorageClass** | 自动创建 PV 的模板（k3s 自带 `local-path`） | 无对应 |
+
+**声明 PVC → K8s 自动建 PV → Pod 挂载 PVC。**
+
+### 建 PVC
+
+```bash
+kubectl apply -f - << 'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+```
+
+`kubectl apply -f -` 表示从标准输入读 YAML，不落文件。
+
+### PVC 显示 Pending 不一定有问题
+
+刚建完 `kubectl get pvc` 会显示 `Pending`，Events 是这样：
+
+```
+WaitForFirstConsumer   waiting for first consumer to be created before binding
+ExternalProvisioning   Waiting for a volume to be created either by the external provisioner
+Provisioning           External provisioner is provisioning volume for claim "default/data"
+ProvisioningSucceeded  Successfully provisioned volume pvc-e2f67e58-...
+```
+
+**`WaitForFirstConsumer` = 延迟绑定**：local-path 的存储在某台节点的本地磁盘上，必须等 Pod 调度完、知道它在哪台机器，才能在那台机器上建 PV。
+
+| 模式 | 行为 | 用在哪 |
+|---|---|---|
+| `Immediate` | PVC 一创建就分配 | 云盘（跨节点都能挂） |
+| **`WaitForFirstConsumer`** | **等有 Pod 用了才分配** | **本地盘** |
+
+**排查判据：Events 里有 `WaitForFirstConsumer` 就是正常 Pending；没有这一行、只有 `no persistent volumes available` 才是真问题。**
+
+**如果真卡住**：给 PVC 显式写 `storageClassName: local-path`，不依赖「默认 StorageClass」这个前提（重装/升级后默认标记可能丢）。
+
+### 实测：换 Pod 数据还在
+
+```bash
+kubectl run writer --image=busybox:1.36 --restart=Never --overrides='{"spec":{"containers":[{"name":"writer","image":"busybox:1.36","command":["sh","-c","echo 我写入了 $(date) > /data/hello.txt; cat /data/hello.txt; sleep 3600"],"volumeMounts":[{"name":"data","mountPath":"/data"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"data"}}]}}'
+```
+
+删掉它，再起一个只读的：
+
+```bash
+kubectl delete pod writer
+kubectl run reader --image=busybox:1.36 --restart=Never --overrides='{"spec":{"containers":[{"name":"reader","image":"busybox:1.36","command":["sh","-c","cat /data/hello.txt; echo; ls -l /data"],"volumeMounts":[{"name":"data","mountPath":"/data"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"data"}}]}}'
+kubectl logs reader
+```
+
+```
+NAME   STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS
+data   Bound    pvc-e2f67e58-1721-4eb7-91cc-f91e96132a1a   1Gi        RWO            local-path
+
+我写入了 Wed Nov 25 02:18:03 UTC 2026
+
+total 4
+-rw-r--r--  1 root  root  42 Nov 25 02:18 hello.txt
+```
+
+**换了 Pod、换了容器、还是同一份数据 —— 这就是 PVC 存在的意义。**
+
+**一个细节**：容器里打印的是 UTC 时间（`02:18 UTC`，宿主机是 `10:18`）。容器默认 UTC，要改时区得挂 `/etc/localtime` 或设 `TZ` 环境变量。
+
 ## 截图索引
 
 | 文件 | 证明什么 |
@@ -396,9 +598,12 @@ OOMKilled / exit 137
 | `screenshots/05-k8s-ImagePullBackOff-状态流转.png` | `ContainerCreating → ErrImagePull → ImagePullBackOff` 三次跳变 |
 | `screenshots/06-k8s-ImagePullBackOff-Events.png` | Events 里的 `403 Forbidden` + `this image is not in the allowlist` |
 | `screenshots/07-k8s-OOMKilled-退出码137.png` | `oom 0/1 OOMKilled` + `OOMKilled / exit 137` |
+| `screenshots/08-k8s-liveness-探针失败.png` | `probe2 0/1 CrashLoopBackOff 3` + `Restart Count: 3` + `Liveness: ... #failure=2` + `Unhealthy x8` / `Killing x4`（8÷4=2 就是 failureThreshold） |
+| `screenshots/09-k8s-readiness-发布卡住.png` | 新旧两 Pod 并存：`1/1 Running` 与 `0/1 Running`；Endpoints 仍指向旧 IP；`rollout status` 超时报 `1 old replicas are pending termination` |
+| `screenshots/10-k8s-PVC-数据持久化.png` | `data Bound pvc-e2f67e58... 1Gi RWO local-path` + 换 Pod 后 `cat` 到 `我写入了 ...` + `hello.txt 42 字节` |
 
 ## 接下来
 
-- 探针：`livenessProbe` / `readinessProbe` 造「探针失败被重启」的第四种重启原因
-- 持久化：PVC + StorageClass（k3s 自带 local-path）
+- 用 `Deployment` + `PVC` 起一个有状态的 nginx（数据目录挂 PVC）
 - 阿里云：ECS + 安全组 + OSS（W6 内容）
+- `kubectl top pod` / HPA 自动扩缩容
