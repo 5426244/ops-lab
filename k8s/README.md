@@ -199,10 +199,6 @@ Content-Length: 615
 | 删整个应用 | `kubectl delete deploy/web svc/web` |
 | 看 containerd 里的镜像 | `sudo k3s crictl images` |
 
-## 面试 30 秒
-
-> 我在 Debian 上用 k3s 起了单节点集群。国内搭 K8s 最难的不是装，是拉镜像——k3s 装完所有 Pod 卡在 ContainerCreating，`describe` 一看是 `FailedCreatePodSandBox: failed to pull rancher/mirrored-pause`。pause 是每个 Pod 的沙箱地基镜像，它拉不到后面全卡，而且报的是 sandbox 失败不是 ImagePull，容易误判。解法是 `/etc/rancher/k3s/registries.yaml` 给 docker.io 配 mirror endpoint，重启 k3s，再删掉卡死的 Pod 让它重建。之后我用 Deployment 跑 nginx，`kubectl get deploy,rs,pods,svc` 能看到四层关系，`expose --type=NodePort` 后 curl 宿主机端口返回 200。
-
 ## 三个故障实测（2026-11-24）
 
 三个故障对应三种状态，都是自己造的。下面每个都按「制造 → 现象 → 定位 → 结论 → 修」写。
@@ -381,10 +377,6 @@ OOMKilled / exit 137
 | `1` | 程序自己认为失败 | 看日志、改代码 |
 | `137` | `128 + 9`，被 SIGKILL | 多半是 OOM，查 limit |
 | `143` | `128 + 15`，收到 SIGTERM | 正常停止 / 被驱逐 |
-
-### 面试 30 秒
-
-> 三个高频故障我都自己造过。`CrashLoopBackOff` 的判断依据是 `describe` 里 `Last State` 的退出码：1 是程序自己退出，137 是被杀，143 是收到 SIGTERM。`ImagePullBackOff` 必须读 Events 原文——我遇到的不是 `manifest unknown` 而是镜像站 `403 not in allowlist`，说明 tag 不存在。`OOMKilled` 我踩过一个坑：limit 给到 2Mi 报的是 `StartError` 不是 `OOMKilled`，因为容器根本没起来；要造这个故障得让 limit 够启动、不够跑业务，我用 alpine + dd 写内存盘才稳定复现，退出码 137。**判据是有没有退出码——有退出码说明容器跑过，没退出码说明没跑起来。**
 
 ## 第四种重启原因：探针（2026-11-25）
 
@@ -601,9 +593,3 @@ total 4
 | `screenshots/08-k8s-liveness-探针失败.png` | `probe2 0/1 CrashLoopBackOff 3` + `Restart Count: 3` + `Liveness: ... #failure=2` + `Unhealthy x8` / `Killing x4`（8÷4=2 就是 failureThreshold） |
 | `screenshots/09-k8s-readiness-发布卡住.png` | 新旧两 Pod 并存：`1/1 Running` 与 `0/1 Running`；Endpoints 仍指向旧 IP；`rollout status` 超时报 `1 old replicas are pending termination` |
 | `screenshots/10-k8s-PVC-数据持久化.png` | `data Bound pvc-e2f67e58... 1Gi RWO local-path` + 换 Pod 后 `cat` 到 `我写入了 ...` + `hello.txt 42 字节` |
-
-## 接下来
-
-- 用 `Deployment` + `PVC` 起一个有状态的 nginx（数据目录挂 PVC）
-- 阿里云：ECS + 安全组 + OSS（W6 内容）
-- `kubectl top pod` / HPA 自动扩缩容
