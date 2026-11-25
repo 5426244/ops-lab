@@ -164,9 +164,7 @@ node-exporter:9100  →  Prometheus:9090 拉取  →  Grafana:3000 出图
 | 文件 | 说明 |
 |---|---|
 | [速查手册_命令与脚本.md](./docs/速查手册_命令与脚本.md) | 12 章：命令组成、程序索引、同名选项不同义、符号、Linux/Shell/Python、报错→解法 |
-| [Python_按天整理_第1-7天.md](./docs/Python_按天整理_第1-7天.md) | Python 入门 7 天，每天一节 + 关键点表 |
-| [week1-day1_三个脚本跑通.md](./docs/week1-day1_三个脚本跑通.md) | 三个 Shell 脚本的当日任务单 |
-| [week1-day1_知识点详解.md](./docs/week1-day1_知识点详解.md) | 15 个知识点 + 调试三件套（`file` / `bash -n` / `bash -x`） |
+| [Python_整理.md](./docs/Python_整理.md) | Python 入门 7 天，每天一节 + 关键点表 |
 
 ---
 
