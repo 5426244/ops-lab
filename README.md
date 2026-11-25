@@ -1,9 +1,8 @@
-﻿# ops-lab
+# ops-lab
 
 2027 届 · 机械设计制造及其自动化 → IT 运维 / 安全运维方向
 Linux · Shell 脚本 · 容器 · 监控
 
-联系方式：2463037277@qq.com · 155-1131-0037
 ---
 
 ## 这个仓库解决什么问题
@@ -17,6 +16,7 @@ Linux · Shell 脚本 · 容器 · 监控
 | [checklist/](./checklist/) | 巡检清单：Linux 加固 20 条 + 巡检采集脚本 | ✅ 20 条已实测填写 |
 | [sql/](./sql/) | 运维常用查询：聚合、分组、多表、子查询 | ✅ 建库脚本 + 10 题答案 |
 | [python/](./python/) | 比 Shell 更合适的场景：端口探测、日志统计 | ✅ port_scan.py 扫 5 端口全通 |
+| [k8s/](./k8s/) | 单节点集群、Deployment/Service、镜像加速踩坑、三个故障排障 | ✅ k3s + nginx + NodePort 可访问；CrashLoopBackOff / ImagePullBackOff / OOMKilled 亲手造过 |
 | [monitor/](./monitor/) | 监控与告警链路 | ✅ 三容器 + 1860 看板 |
 | [docs/](./docs/) | 运维手册、排障记录、速查表 | ✅ 6 份 |
 
@@ -52,6 +52,8 @@ sudo python3 scripts/log_stat.py
 | 文件 | 说明 |
 |---|---|
 | [docker/README.md](./docker/README.md) | 七个环节、三个实验对比、四个坑 |
+| docker/myweb/Dockerfile | 基于 nginx，`COPY` 自定义首页 |
+| docker/stack/docker-compose.yml | nginx + mysql 5.7 双服务 |
 
 三个实验的差别（只看 `curl` 返回）：
 
@@ -98,11 +100,73 @@ LEFT JOIN 出空行时，前者给 1，后者给 0。
 
 ---
 
+## python/
+
+Shell 写起来别扭的活儿交给 Python：网络探测和文本统计。
+
+| 文件 | 说明 |
+|---|---|
+| [port_scan.py](./python/port_scan.py) | socket 扫端口，`connect_ex()` 返回 0 即开放 |
+| [log_stat.py](./python/log_stat.py) | 统计访问日志里各 IP 出现次数，支持 `--top N` |
+
+实测：扫 `192.168.59.130` 的 `21/22/23/80/1524` 五个端口全通（1524 是 Metasploitable2 的后门端口）；`log_stat.py` 对 30 条正常流量统计出 1 个 IP、筛 404 后剩 10 条。
+
+一个自己补上的坑：`--top` 后面不给数字会 `IndexError: list index out of range`，因为 `args[i + 1]` 越界。修法是先判断 `i + 1 >= len(args)` 再取值，顺便用 `try/except ValueError` 挡住非数字。
+
+---
+
+## k8s/
+
+单节点集群（k3s），从部署到排障到持久化走了一遍。
+
+| 文件 | 说明 |
+|---|---|
+| [k8s/README.md](./k8s/README.md) | 为什么用 k3s、pause 镜像卡点、四类重启原因、探针、PVC |
+| [k8s/screenshots/](./k8s/screenshots/) | 9 张实测截图，编号 01–10 |
+
+三个值得单独说的点：
+
+**1. minikube 起不来，不是我的问题**
+`kubelet` 从阿里云镜像拉取报 `invalid checksum: ... bad response code: 404`。逐个探测 7 个版本的 `kubelet.sha256` 全是 404，`stable.txt` 停在 `v1.13.4`（2018 年）——镜像站的 K8s 二进制目录已停更。改用 k3s `v1.37.2+k3s1`。
+
+**2. Pod 卡 `ContainerCreating` 但看不到 `Pulling`**
+`describe` 的 Events 里翻到 `FailedCreatePodSandBox`：`pause` 沙箱镜像从 `docker.io` 拉不到。**pause 是每个 Pod 的地基镜像，它失败时不会报 `ImagePullBackOff`**，报的是 sandbox 错误。配 `/etc/rancher/k3s/registries.yaml` 走镜像加速解决。
+
+**3. 四类重启原因，全亲手造过**
+程序自己退出（`exit 1`）、镜像拉不到（`403 not in allowlist`）、内存超限（`OOMKilled` / `exit 137`）、探针失败（`Running` 但 RESTARTS 在涨）。判据：**有退出码说明容器跑过，没退出码说明没跑起来**。
+
+另外两个进阶：`readinessProbe` 失败时 Pod 是 `Running` 但 `READY 0/1`，不进 Service 后端，所以发布卡住而服务不中断（零宕机发布）；PVC 的 `WaitForFirstConsumer` 表示延迟绑定，Pod 调度完才建 PV。
+
+---
+
+## monitor/
+
+监控链路三个容器串起来：
+
+```
+node-exporter:9100  →  Prometheus:9090 拉取  →  Grafana:3000 出图
+```
+
+| 文件 | 说明 |
+|---|---|
+| [monitor/README.md](./monitor/README.md) | 三容器启动、5 条 PromQL、数据源配置、排障记录 |
+| [monitor/prometheus.yml](./monitor/prometheus.yml) | 两个 job：`prometheus` 和 `node` |
+| [monitor/screenshots/](./monitor/screenshots/) | targets 全 UP、数据源连通、看板 1860 |
+
+**为什么不用 apt 装 Grafana**：Kali 的 Grafana 13 装完后前端资源请求返回 302 跳到 `/login`，`public/views/index.html` 里的 Go 模板占位符没被渲染，说明二进制和前端文件版本不匹配（dpkg 中途失败）。改用官方镜像跑容器，文件是配套的。
+
+**一个必须记住的配置**：Grafana 里的数据源地址要填 `http://prometheus:9090`，**不能填 `127.0.0.1:9090`**——容器里的 `127.0.0.1` 指的是它自己，不是宿主机。同一 Docker 网络里直接用容器名互访。
+
+---
+
 ## docs/
 
 | 文件 | 说明 |
 |---|---|
 | [速查手册_命令与脚本.md](./docs/速查手册_命令与脚本.md) | 12 章：命令组成、程序索引、同名选项不同义、符号、Linux/Shell/Python、报错→解法 |
+| [Python_按天整理_第1-7天.md](./docs/Python_按天整理_第1-7天.md) | Python 入门 7 天，每天一节 + 关键点表 |
+| [week1-day1_三个脚本跑通.md](./docs/week1-day1_三个脚本跑通.md) | 三个 Shell 脚本的当日任务单 |
+| [week1-day1_知识点详解.md](./docs/week1-day1_知识点详解.md) | 15 个知识点 + 调试三件套（`file` / `bash -n` / `bash -x`） |
 
 ---
 
@@ -130,5 +194,19 @@ Kali 的 find 不认 `-verbose`，报 `find: unknown predicate '-verbose'`。
 **6. `docker rm` 删容器，`docker rmi` 删镜像**
 报 `No such container: myweb` 是因为 myweb 是镜像；
 报 `No such image: r1:latest` 是因为 r1 是容器。
+
+---
+
+## 待办（按 8 周计划推进）
+
+- [x] Week 1：三个 Shell 脚本 + Python 基础（第 1–7 天）
+- [x] Week 2：Docker 三天（提前完成）+ Linux 加固四天
+- [x] Week 3：SQL + 备份恢复实战 + logrotate + 运维手册
+- [x] Week 4：Python 小工具（`port_scan.py` / `log_stat.py`）+ Prometheus/Grafana
+- [~] Week 5–6：K8s —— 部署 ✅（k3s + nginx + NodePort）、排障 ✅（四类重启 + 探针 + PVC）、阿里云 🚧
+- [ ] Week 7：Windows Server + 网络设备核查
+- [ ] Week 8：仓库整合 + 简历改版
+
+
 
 
