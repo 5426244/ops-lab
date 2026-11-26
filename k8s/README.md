@@ -1,4 +1,4 @@
-# k8s/ — 单节点集群与第一个应用
+﻿# k8s/ — 单节点集群与第一个应用
 
 在 Debian 13 上用 **k3s** 起单节点集群，跑一个 nginx Deployment + NodePort Service。
 
@@ -580,6 +580,126 @@ total 4
 
 **一个细节**：容器里打印的是 UTC 时间（`02:18 UTC`，宿主机是 `10:18`）。容器默认 UTC，要改时区得挂 `/etc/localtime` 或设 `TZ` 环境变量。
 
+## 有状态部署：Deployment 挂 PVC（2026-11-26）
+
+前面是「一个 Pod 用 PVC」，这一步换成 **Deployment 管理 Pod + PVC 挂数据目录** —— 真实业务里 nginx 挂网页目录、MySQL 挂数据目录都是这个写法。
+
+### 一份 YAML 两个对象
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: webdata
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webstate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webstate
+  template:
+    metadata:
+      labels:
+        app: webstate
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: html
+          persistentVolumeClaim:
+            claimName: webdata
+```
+
+`---` 是 YAML 的分隔符，一个文件里放多个对象，`kubectl apply -f` 会依次创建。
+
+文件落在 `ops-lab/k8s/manifests/web-pvc.yaml`。
+
+### 一个必须先知道的现象：卷会盖住目录原有内容
+
+nginx 镜像自带欢迎页 `/usr/share/nginx/html/index.html`。把**空 PVC** 挂到这个目录后，镜像里那层内容被盖住了，目录变成空的，访问就是 `403 Forbidden`。
+
+挂载的基本规则是：**数据卷永远在最上层，镜像里同名路径被遮蔽**。所以要先自己写一个页面进去。
+
+### 实测：删 Pod 重建，页面还在
+
+```bash
+POD=$(kubectl get pod -l app=webstate -o jsonpath='{.items[0].metadata.name}')
+kubectl exec $POD -- sh -c 'echo "<h1>张野的 PVC 页面 v1</h1>" > /usr/share/nginx/html/index.html'
+kubectl exec $POD -- cat /usr/share/nginx/html/index.html
+```
+
+```
+<h1>张野的 PVC 页面 v1</h1>
+```
+
+删掉 Pod，Deployment 自动拉起一个新的：
+
+```bash
+kubectl delete pod $POD
+kubectl get pods -l app=webstate
+```
+
+```
+NAME                        READY   STATUS    RESTARTS   AGE
+webstate-56d5d8455f-2rv4d   1/1     Running   0          79s
+```
+
+重新取一次 Pod 名（旧变量已失效），再读文件：
+
+```bash
+POD=$(kubectl get pod -l app=webstate -o jsonpath='{.items[0].metadata.name}')
+kubectl exec $POD -- cat /usr/share/nginx/html/index.html
+```
+
+```
+<h1>张野的 PVC 页面 v1</h1>
+```
+
+### 三件证据缺一不可
+
+| 证据 | 数值 | 证明什么 |
+|---|---|---|
+| PVC `webdata` | `Bound`，AGE **6m54s** | 卷是老的，没重建 |
+| Pod `webstate-...-2rv4d` | AGE **79s**，名字带新 hash | 容器是新的 |
+| `cat` 输出 | `<h1>张野的 PVC 页面 v1</h1>` | 内容还是老的 |
+
+**判据：PVC 的 AGE 远大于 Pod 的 AGE，而内容不变 —— 数据在卷里，不在容器里。**
+
+只看「页面还在」无法排除「Pod 根本没被删」，所以必须同时有这两个时间戳。
+
+### 两个坑
+
+**① 删 Pod 后 `$POD` 变量失效**
+
+`kubectl delete pod $POD` 之后，变量还指着已删除的 Pod 名，再 `exec` 会报 `not found`。必须重新 `kubectl get pod ... -o jsonpath` 取一次。
+
+**② `kubectl exec` 里的重定向要在容器内执行**
+
+```bash
+kubectl exec $POD -- echo "xxx" > /usr/share/nginx/html/index.html
+```
+
+反例：这里的 `>` 是**宿主机的 shell** 在重定向，文件被写到你本机根目录，容器里什么都没变。
+
+```bash
+kubectl exec $POD -- sh -c 'echo "xxx" > /usr/share/nginx/html/index.html'
+```
+
+正解：加 `sh -c` 才是让容器内的 shell 去执行重定向。
+
 ## 截图索引
 
 | 文件 | 证明什么 |
@@ -593,3 +713,5 @@ total 4
 | `screenshots/08-k8s-liveness-探针失败.png` | `probe2 0/1 CrashLoopBackOff 3` + `Restart Count: 3` + `Liveness: ... #failure=2` + `Unhealthy x8` / `Killing x4`（8÷4=2 就是 failureThreshold） |
 | `screenshots/09-k8s-readiness-发布卡住.png` | 新旧两 Pod 并存：`1/1 Running` 与 `0/1 Running`；Endpoints 仍指向旧 IP；`rollout status` 超时报 `1 old replicas are pending termination` |
 | `screenshots/10-k8s-PVC-数据持久化.png` | `data Bound pvc-e2f67e58... 1Gi RWO local-path` + 换 Pod 后 `cat` 到 `我写入了 ...` + `hello.txt 42 字节` |
+| `screenshots/11-k8s-Deployment挂PVC-页面不丢.png` | 一张图三证据：PVC AGE 6m54s Bound + Pod AGE 79s Running + `cat` 出 `张野的 PVC 页面 v1` |
+
