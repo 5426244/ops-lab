@@ -18,6 +18,7 @@ Linux · Shell 脚本 · 容器 · 监控
 | [python/](./python/) | 比 Shell 更合适的场景：端口探测、日志统计 | ✅ port_scan.py 扫 5 端口全通 |
 | [k8s/](./k8s/) | 单节点集群、Deployment/Service、镜像加速踩坑、三个故障排障 | ✅ k3s + nginx + NodePort 可访问；CrashLoopBackOff / ImagePullBackOff / OOMKilled 亲手造过 |
 | [monitor/](./monitor/) | 监控与告警链路 | ✅ 三容器 + 1860 看板 |
+| [cloud/](./cloud/) | 云上开机器与对象存储：ECS + 安全组 + nginx + OSS 私有桶 | ✅ 含 3 张实测截图 |
 | [docs/](./docs/) | 运维手册、排障记录、速查表 | ✅ 6 份 |
 
 ---
@@ -121,8 +122,9 @@ Shell 写起来别扭的活儿交给 Python：网络探测和文本统计。
 
 | 文件 | 说明 |
 |---|---|
-| [k8s/README.md](./k8s/README.md) | 为什么用 k3s、pause 镜像卡点、四类重启原因、探针、PVC |
-| [k8s/screenshots/](./k8s/screenshots/) | 9 张实测截图，编号 01–10 |
+| [k8s/README.md](./k8s/README.md) | 为什么用 k3s、pause 镜像卡点、四类重启原因、探针、PVC、有状态部署 |
+| [k8s/manifests/web-pvc.yaml](./k8s/manifests/web-pvc.yaml) | 一份 YAML 两个对象：PVC + Deployment |
+| [k8s/screenshots/](./k8s/screenshots/) | 10 张实测截图，编号 01–11 |
 
 三个值得单独说的点：
 
@@ -135,7 +137,7 @@ Shell 写起来别扭的活儿交给 Python：网络探测和文本统计。
 **3. 四类重启原因，全亲手造过**
 程序自己退出（`exit 1`）、镜像拉不到（`403 not in allowlist`）、内存超限（`OOMKilled` / `exit 137`）、探针失败（`Running` 但 RESTARTS 在涨）。判据：**有退出码说明容器跑过，没退出码说明没跑起来**。
 
-另外两个进阶：`readinessProbe` 失败时 Pod 是 `Running` 但 `READY 0/1`，不进 Service 后端，所以发布卡住而服务不中断（零宕机发布）；PVC 的 `WaitForFirstConsumer` 表示延迟绑定，Pod 调度完才建 PV。
+另外三个进阶：`readinessProbe` 失败时 Pod 是 `Running` 但 `READY 0/1`，不进 Service 后端，所以发布卡住而服务不中断（零宕机发布）；PVC 的 `WaitForFirstConsumer` 表示延迟绑定，Pod 调度完才建 PV；**Deployment 挂 PVC 后删 Pod 重建，页面内容不变 —— 判据是 PVC 的 AGE 远大于 Pod 的 AGE**（老卷 + 新容器 + 老内容）。
 
 ---
 
@@ -159,12 +161,42 @@ node-exporter:9100  →  Prometheus:9090 拉取  →  Grafana:3000 出图
 
 ---
 
+## cloud/
+
+一台按量付费的阿里云 ECS，从开通到释放走了一遍完整流程，外加一个私有 OSS 桶。
+
+| 环节 | 做了什么 | 关键判据 |
+|---|---|---|
+| 开通 | 华北2 · 2核2GiB · Debian 12 · 按量 ¥0.123/小时 | 换系统要选**普通停机模式**，否则可能「库存不足启动失败」 |
+| 登录 | 密钥对拿不到私钥 → Workbench 免密通道 → 开密码登录 | `sshd -T \| grep passwordauth` 应为 `yes` |
+| 安全组 | 默认只放 22，手动放行 80/80 | 加完立刻 `Test-NetConnection -Port 80` 验证 |
+| nginx | `apt-get install nginx`，换成自定义页再公网访问 | `curl -I` 拿 `200` + `Server: nginx/1.22.1` |
+| OSS | 建私有桶、传对象、用裸 URL 验证被拒 | 403 + `because of bucket acl` + `EC 0003-00000001` |
+
+### 三种 403 必须分清
+
+同样返回 `AccessDenied`，含义完全不同：
+
+| 访问方式 | Message | EC |
+|---|---|---|
+| 对象 URL 无签名 | `because of bucket acl` | `0003-00000001` ← 权限生效 |
+| Bucket 根无签名 | `Anonymous user has no right to access this bucket` | `0003-00000002` |
+| 带签名但已过期 | `Request has expired` | `0002-00000069` ← 凭据过期，与权限无关 |
+
+**辨析方法：看 XML 里有没有 `<Expires>` 元素——有是签名过期，没有才是权限拒绝。**
+
+详细过程见 [cloud/README.md](./cloud/README.md)（含开通三个坑、安全组字段对照、费用与释放）。
+
+---
+
 ## docs/
 
 | 文件 | 说明 |
 |---|---|
 | [速查手册_命令与脚本.md](./docs/速查手册_命令与脚本.md) | 12 章：命令组成、程序索引、同名选项不同义、符号、Linux/Shell/Python、报错→解法 |
-| [Python_整理.md](./docs/Python_整理.md) | Python 入门 7 天，每天一节 + 关键点表 |
+| [Python_按天整理_第1-7天.md](./docs/Python_按天整理_第1-7天.md) | Python 入门 7 天，每天一节 + 关键点表 |
+| [week1-day1_三个脚本跑通.md](./docs/week1-day1_三个脚本跑通.md) | 三个 Shell 脚本的当日任务单 |
+| [week1-day1_知识点详解.md](./docs/week1-day1_知识点详解.md) | 15 个知识点 + 调试三件套（`file` / `bash -n` / `bash -x`） |
 
 ---
 
@@ -201,9 +233,11 @@ Kali 的 find 不认 `-verbose`，报 `find: unknown predicate '-verbose'`。
 - [x] Week 2：Docker 三天（提前完成）+ Linux 加固四天
 - [x] Week 3：SQL + 备份恢复实战 + logrotate + 运维手册
 - [x] Week 4：Python 小工具（`port_scan.py` / `log_stat.py`）+ Prometheus/Grafana
-- [~] Week 5–6：K8s —— 部署 ✅（k3s + nginx + NodePort）、排障 ✅（四类重启 + 探针 + PVC）、阿里云 🚧
+- [x] Week 5–6：K8s —— 部署 ✅（k3s + nginx + NodePort）、排障 ✅（四类重启 + 探针 + PVC + 有状态部署）、阿里云 ✅（ECS + 安全组 + nginx + OSS 私有桶，已释放）
+- [ ] Week 6 剩余：云监控（CloudMonitor）接入
 - [ ] Week 7：Windows Server + 网络设备核查
 - [ ] Week 8：仓库整合 + 简历改版
+
 
 
 
