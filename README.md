@@ -1,4 +1,4 @@
-# ops-lab
+﻿# ops-lab
 
 2027 届 · 机械设计制造及其自动化 → IT 运维 / 安全运维方向
 Linux · Shell 脚本 · 容器 · 监控
@@ -19,6 +19,7 @@ Linux · Shell 脚本 · 容器 · 监控
 | [k8s/](./k8s/) | 单节点集群、Deployment/Service、镜像加速踩坑、三个故障排障 | ✅ k3s + nginx + NodePort 可访问；CrashLoopBackOff / ImagePullBackOff / OOMKilled 亲手造过 |
 | [monitor/](./monitor/) | 监控与告警链路 | ✅ 三容器 + 1860 看板 |
 | [cloud/](./cloud/) | 云上开机器与对象存储：ECS + 安全组 + nginx + OSS 私有桶 | ✅ 含 3 张实测截图 |
+| [windows/](./windows/) | Windows Server 域环境与安全基线：用户与组、密码策略与账户锁定、事件日志取证 | ✅ 含 4 张实测截图 |
 | [docs/](./docs/) | 运维手册、排障记录、速查表 | ✅ 6 份 |
 
 ---
@@ -124,7 +125,7 @@ Shell 写起来别扭的活儿交给 Python：网络探测和文本统计。
 |---|---|
 | [k8s/README.md](./k8s/README.md) | 为什么用 k3s、pause 镜像卡点、四类重启原因、探针、PVC、有状态部署 |
 | [k8s/manifests/web-pvc.yaml](./k8s/manifests/web-pvc.yaml) | 一份 YAML 两个对象：PVC + Deployment |
-| [k8s/screenshots/](./k8s/screenshots/) | 10 张实测截图，编号 01–11 |
+| [k8s/screenshots/](./k8s/screenshots/) | 10 张实测截图，编号 01–10 |
 
 三个值得单独说的点：
 
