@@ -707,11 +707,11 @@ kubectl exec $POD -- sh -c 'echo "xxx" > /usr/share/nginx/html/index.html'
 | `screenshots/01-k3s-四层对象与Service.png` | `deploy,rs,pods,svc` 一次看全：Deployment 1/1、RS 1/1、Pod Running、Service NodePort 80:32676 |
 | `screenshots/02-k3s-curl验证nginx.png` | `curl -I 127.0.0.1:32676` 返回 `HTTP/1.1 200 OK` + `Server: nginx/1.27.5` |
 | `screenshots/03-k8s-CrashLoopBackOff-与修复对比.png` | `crash2 Error / RESTARTS 3` + `Args: exit 1` + `crash-fixed Running`，一张图含故障与修复 |
-| `screenshots/05-k8s-ImagePullBackOff-状态流转.png` | `ContainerCreating → ErrImagePull → ImagePullBackOff` 三次跳变 |
-| `screenshots/06-k8s-ImagePullBackOff-Events.png` | Events 里的 `403 Forbidden` + `this image is not in the allowlist` |
-| `screenshots/07-k8s-OOMKilled-退出码137.png` | `oom 0/1 OOMKilled` + `OOMKilled / exit 137` |
-| `screenshots/08-k8s-liveness-探针失败.png` | `probe2 0/1 CrashLoopBackOff 3` + `Restart Count: 3` + `Liveness: ... #failure=2` + `Unhealthy x8` / `Killing x4`（8÷4=2 就是 failureThreshold） |
-| `screenshots/09-k8s-readiness-发布卡住.png` | 新旧两 Pod 并存：`1/1 Running` 与 `0/1 Running`；Endpoints 仍指向旧 IP；`rollout status` 超时报 `1 old replicas are pending termination` |
-| `screenshots/10-k8s-PVC-数据持久化.png` | `data Bound pvc-e2f67e58... 1Gi RWO local-path` + 换 Pod 后 `cat` 到 `我写入了 ...` + `hello.txt 42 字节` |
-| `screenshots/11-k8s-Deployment挂PVC-页面不丢.png` | 一张图三证据：PVC AGE 6m54s Bound + Pod AGE 79s Running + `cat` 出 `张野的 PVC 页面 v1` |
+| `screenshots/04-k8s-ImagePullBackOff-状态流转.png` | `ContainerCreating → ErrImagePull → ImagePullBackOff` 三次跳变 |
+| `screenshots/05-k8s-ImagePullBackOff-Events.png` | Events 里的 `403 Forbidden` + `this image is not in the allowlist` |
+| `screenshots/06-k8s-OOMKilled-退出码137.png` | `oom 0/1 OOMKilled` + `OOMKilled / exit 137` |
+| `screenshots/07-k8s-liveness-探针失败.png` | `probe2 0/1 CrashLoopBackOff 3` + `Restart Count: 3` + `Liveness: ... #failure=2` + `Unhealthy x8` / `Killing x4`（8÷4=2 就是 failureThreshold） |
+| `screenshots/08-k8s-readiness-发布卡住.png` | 新旧两 Pod 并存：`1/1 Running` 与 `0/1 Running`；Endpoints 仍指向旧 IP；`rollout status` 超时报 `1 old replicas are pending termination` |
+| `screenshots/9-k8s-PVC-数据持久化.png` | `data Bound pvc-e2f67e58... 1Gi RWO local-path` + 换 Pod 后 `cat` 到 `我写入了 ...` + `hello.txt 42 字节` |
+| `screenshots/10-k8s-Deployment挂PVC-页面不丢.png` | 一张图三证据：PVC AGE 6m54s Bound + Pod AGE 79s Running + `cat` 出 `张野的 PVC 页面 v1` |
 
